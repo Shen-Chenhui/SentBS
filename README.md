@@ -37,7 +37,7 @@ If you find our paper and resources useful, please kindly leave a star and cite 
 ### Catalogue:
 * <a href='#introduction'>1. Introduction</a>
 * <a href='#reproduce_examples'>2. Running our code</a>
-    * <a href='#pre-requisites'>2.1. pre-requisites</a>
+    * <a href='#pre-requisites'>2.1. Pre-requisites</a>
     * <a href='#reproduce'>2.2. Commands to reproduce our results</a>
         * <a href='#sent-ctrl'>2.2.1. Reproduce sent-ctrl</a>
         * <a href='#classifier'>2.2.2. Train Classifier</a>
@@ -79,7 +79,7 @@ Unzip the downloaded data and place all data folders under the root folder named
 
 <span id='sent-ctrl'/>
 
-###### 2.2.1. Reproduce Sent-Ctrl (upper section of Table 1):
+###### 2.2.1. Reproduce Sent-Ctrl (upper section of Table 1): <a href='#all_catelogue'>[Back to Top]</a>
 
 We include the <a href="https://drive.google.com/file/d/1VpUinizFet_psuyqL7Y1miGe2y5Vg9z2/view?usp=sharing">reformatted data</a> used for our experiments. The original data can also be obtained from <a href="https://github.com/Shen-Chenhui/MReD/tree/master/summarization/abstractive/filtered_controlled_data">here</a>. 
 
@@ -91,7 +91,7 @@ CUDA_VISIBLE_DEVICES=0 python ctrl_transformer.py --model_name_or_path facebook/
 
 <span id='classifier'/>
 
-###### 2.2.2. Train Classifier:
+###### 2.2.2. Train Classifier: <a href='#all_catelogue'>[Back to Top]</a>
 For the MReD dataset, we additionally train a sentence classifier so that during generation, the selection of sentence options is based on both the category classification score as well as the sequence likelihood.
 
 The classifier is trained on the <a href="https://drive.google.com/file/d/1VpUinizFet_psuyqL7Y1miGe2y5Vg9z2/view?usp=sharing">LSTM-labelled training data split</a>.
@@ -103,7 +103,7 @@ CUDA_VISIBLE_DEVICES=0 python train_sent_classifier.py --model_path roberta-larg
 
 <span id='sent-ctrl_sentbs'/>
 
-###### 2.2.3. Reproduce Sent-Ctrl + SentBS (middle section of Table 1):
+###### 2.2.3. Reproduce Sent-Ctrl + SentBS (middle section of Table 1): <a href='#all_catelogue'>[Back to Top]</a>
 
 For the following commands, you may adjust the ```k``` value with the flag ```--gen_size```.
 * For nucleus sampling:
@@ -135,7 +135,7 @@ You may use the flag ```--num_beam_sample_gen``` to control the number of senten
 
 <span id='seg-ctrl'/>
 
-###### 2.2.4. Reproduce Seg-Ctrl (bottom section of Table 1):
+###### 2.2.4. Reproduce Seg-Ctrl (bottom section of Table 1): <a href='#all_catelogue'>[Back to Top]</a>
 
 To reproduce the seg-ctrl baseline, run:
 
