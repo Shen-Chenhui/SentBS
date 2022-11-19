@@ -49,7 +49,6 @@ from utils import (
     beam_search,
     beam_search_sent,
     get_prompts_from_input_text,
-    remove_prompts,
     postprocess_text,
     compute_metrics,
     get_logits_processor,
@@ -76,36 +75,12 @@ def generate_beam_search(
         max_source_length: int = 2048,
         gen_target_min: int = 20,
         gen_target_max: int = 400,
-        control: str=None,
-        repeat_control: int=1,
 ):
     device = model.device
     # switch to evaluation mode
     model.eval()
-    if control is None:
     # prepare source
-        encoder_input_ids = tokenizer(text,max_length=max_source_length,padding=False,truncation=True,return_tensors="pt").input_ids.to(device)
-    else:
-        labelsep_id = tokenizer.convert_tokens_to_ids("<label-sep>")
-        sentsep_id = tokenizer.convert_tokens_to_ids("<sent-sep>")
-        sep_id = tokenizer.convert_tokens_to_ids("<sep>")
-        # print("control:", control)
-        # print("repeat:", repeat_control)
-        control = [x.strip() for x in control.split(',') if x.strip()!=""]
-
-        encoder_input_ids = []
-        for item in control:
-            control_id = tokenizer.encode(item, padding=False)[1:-1] # remove bos and eos
-            encoder_input_ids.extend([labelsep_id] + control_id * repeat_control) # SentBS: NEW repeat n times if needed
-        encoder_input_ids.extend([sentsep_id]) 
-        # process source 
-        inputs = [x.strip() for x in text.split('<sep>') if x.strip()!=""]
-        for item in inputs:
-            encoder_input_ids.extend(tokenizer.encode(item, padding=False)[1:-1]+[sep_id])
-        encoder_input_ids = encoder_input_ids[:-1] # remove last <sep>
-        encoder_input_ids = ([tokenizer.bos_token_id]+encoder_input_ids[:max_source_length-2]+[tokenizer.eos_token_id])
-        encoder_input_ids = torch.tensor([encoder_input_ids]).to(device)
-
+    encoder_input_ids = tokenizer(text,max_length=max_source_length,padding=False,truncation=True,return_tensors="pt").input_ids.to(device)
     encoder_outputs = model.get_encoder()(encoder_input_ids, return_dict=True)
     expanded_return_idx = (torch.arange(encoder_input_ids.shape[0]).view(-1, 1).repeat(1, num_beams).view(-1))
     # instead of copy all states, only copy the hidden_states to save gpu space
@@ -150,271 +125,6 @@ def generate_beam_search(
     text = tokenizer.batch_decode(outputs, skip_special_tokens=True, clean_up_tokenization_spaces=True)[0].strip()
     loss = None
     return text
-
-def generate_beam_search_sent(
-        text: str,
-        model: PreTrainedModel,
-        tokenizer: PreTrainedTokenizerFast,
-        loss_fn=CrossEntropyLoss(),
-        vocab_text: str = None,
-        num_beams: int = 4,
-        max_source_length: int = 2048,
-        gen_target_min: int = 20,
-        gen_target_max: int = 800,
-        control: str=None,
-        repeat_control: int=1,
-):
-    device = model.device
-    # switch to evaluation mode
-    model.eval()
-    if control is None:
-    # prepare source
-        encoder_input_ids = tokenizer(text,max_length=max_source_length,padding=False,truncation=True,return_tensors="pt").input_ids.to(device)
-    else:
-        labelsep_id = tokenizer.convert_tokens_to_ids("<label-sep>")
-        sentsep_id = tokenizer.convert_tokens_to_ids("<sent-sep>")
-        sep_id = tokenizer.convert_tokens_to_ids("<sep>")
-        # print("control:", control)
-        control = [x.strip() for x in control.split(',') if x.strip()!=""]
-
-        encoder_input_ids = []
-        for item in control:
-            control_id = tokenizer.encode(item, padding=False)[1:-1] # remove bos and eos
-            encoder_input_ids.extend([labelsep_id] + control_id * repeat_control) # SentBS: NEW repeat n times if needed
-        encoder_input_ids.extend([sentsep_id]) 
-        # process source 
-        inputs = [x.strip() for x in text.split('<sep>') if x.strip()!=""]
-        for item in inputs:
-            encoder_input_ids.extend(tokenizer.encode(item, padding=False)[1:-1]+[sep_id])
-        encoder_input_ids = encoder_input_ids[:-1] # remove last <sep>
-        encoder_input_ids = ([tokenizer.bos_token_id]+encoder_input_ids[:max_source_length-2]+[tokenizer.eos_token_id])
-        encoder_input_ids = torch.tensor([encoder_input_ids]).to(device)
-
-    encoder_outputs = model.get_encoder()(encoder_input_ids, return_dict=True)
-    expanded_return_idx = (torch.arange(encoder_input_ids.shape[0]).view(-1, 1).repeat(1, num_beams).view(-1))
-    # instead of copy all states, only copy the hidden_states to save gpu space
-    encoder_outputs["last_hidden_state"] = encoder_outputs.last_hidden_state.index_select(0, expanded_return_idx.to(device))
-
-    model_kwargs = {"encoder_outputs": encoder_outputs,}
-    eos, bos = tokenizer.eos_token_id, tokenizer.bos_token_id
-
-    assert model.config.model_type == "bart"
-    decoder_input_ids_base = torch.LongTensor([[model.config.decoder_start_token_id]]).to(device)
-
-    # for original
-    min_length = gen_target_min
-    max_length = gen_target_max
-    logits_processor = get_logits_processor(model.config, encoder_input_ids = encoder_input_ids, min_length = min_length, max_length = max_length,num_beams = num_beams,)
-    length_penalty = model.config.length_penalty # default is 2
-    early_stopping = model.config.early_stopping
-    num_return_sequences = model.config.num_return_sequences
-    beam_scorer = BeamSearchScorer(batch_size=1,num_beams=num_beams,device=device,length_penalty=length_penalty,do_early_stopping=early_stopping,num_beam_hyps_to_keep=num_return_sequences,)
-    stopping_criteria = StoppingCriteriaList()
-    stopping_criteria.append(MaxLengthCriteria(max_length=max_length))
-
-    # SentBS: process control prompts
-    pre_prompt = "<label-sep>"
-    post_prompt = "<sent-sep>"
-    prompts = control
-    formating = ""
-    prompt_ids = []
-    for i, control_signal in enumerate(prompts):
-        if i == 0:
-            # Don't remove bos for the first prompt
-            lst = [i for i in tokenizer(pre_prompt+formating+control_signal+formating+post_prompt+formating).input_ids if i != eos]
-        else:
-            lst = [i for i in tokenizer(formating+pre_prompt+formating+control_signal+formating+post_prompt+formating).input_ids if i != bos and i != eos]
-        prompt_ids.append((lst, control_signal)) # format (ids, label_text)
-    
-    # SentBS: process first decoder input prompt
-    prompt_tensor = torch.LongTensor([prompt_ids[0][0]]).to(device)
-    decoder_input_ids_base = torch.cat((decoder_input_ids_base, prompt_tensor), dim=1)
-    assert decoder_input_ids_base.dim() == 2 and decoder_input_ids_base.size(0) == 1
-
-
-    with torch.no_grad():
-        decoder_input_ids = decoder_input_ids_base.index_select(0, expanded_return_idx.to(device))
-
-        # model.debug_count = 0 # DEBUG
-        outputs = beam_search_sent(
-            model,
-            tokenizer,
-            decoder_input_ids,
-            prompt_ids[1:], # 1st prompt used already
-            beam_scorer,
-            logits_processor=logits_processor,
-            stopping_criteria=stopping_criteria,
-            pad_token_id=model.config.pad_token_id if model.config.pad_token_id is not None else eos,
-            eos_token_id=eos,
-            return_dict_in_generate=model.config.return_dict_in_generate,
-            **model_kwargs,
-        )
-        if isinstance(outputs, BeamSearchEncoderDecoderOutput) or isinstance(outputs, BeamSearchDecoderOnlyOutput):
-            outputs = outputs.sequences
-        assert outputs.dim() == 2 and outputs.size(0) == 1
-    
-    text = tokenizer.batch_decode(outputs, skip_special_tokens=True, clean_up_tokenization_spaces=True)[0].strip()
-    loss = None
-
-    # print("generated text: ", text)
-
-    return text
-
-def generate_greedy_search(
-        text: str,
-        model: PreTrainedModel,
-        tokenizer: PreTrainedTokenizerFast,
-        loss_fn=CrossEntropyLoss(),
-        vocab_text: str = None,
-        control: str = None, # OPTIONAL
-        max_source_length: int = 2048,
-        gen_target_min: int = 20,
-        gen_target_max: int = 400,
-):
-    device = model.device
-    
-    # switch to evaluation mode
-    model.eval()
-    # prepare source
-    encoder_input_ids = tokenizer(text,max_length=max_source_length,padding=False,truncation=True,return_tensors="pt").input_ids.to(device)
-    encoder_outputs = model.get_encoder()(encoder_input_ids, return_dict=True)
-    model_kwargs = {"encoder_outputs": encoder_outputs,}
-    eos, bos = tokenizer.eos_token_id, tokenizer.bos_token_id
-
-    assert model.config.model_type == "bart"
-    decoder_input_ids = torch.LongTensor([[model.config.decoder_start_token_id]]).to(device)
-
-    # for original
-    min_length = gen_target_min
-    max_length = gen_target_max
-    logits_processor = get_logits_processor(model.config, encoder_input_ids = encoder_input_ids, min_length = min_length, max_length = max_length,num_beams = 1,)
-    length_penalty = model.config.length_penalty # default is 2
-    early_stopping = model.config.early_stopping # true
-    # num_return_sequences = model.config.num_return_sequences
-    stopping_criteria = StoppingCriteriaList()
-    stopping_criteria.append(MaxLengthCriteria(max_length=max_length))
-
-    with torch.no_grad():
-        assert decoder_input_ids.dim() == 2 and decoder_input_ids.size(0) == 1
-
-        outputs = greedy_search(
-            model,
-            tokenizer,
-            decoder_input_ids,
-            logits_processor=logits_processor,
-            stopping_criteria=stopping_criteria,
-            pad_token_id=model.config.pad_token_id if model.config.pad_token_id is not None else eos,
-            eos_token_id=eos,
-            return_dict_in_generate=model.config.return_dict_in_generate,
-            **model_kwargs,
-        )
-        if isinstance(outputs, BeamSearchEncoderDecoderOutput) or isinstance(outputs, BeamSearchDecoderOnlyOutput):
-            outputs = outputs.sequences
-        assert outputs.dim() == 2 and outputs.size(0) == 1
-
-    text = tokenizer.batch_decode(outputs, skip_special_tokens=True, clean_up_tokenization_spaces=True)[0].strip()
-    loss = None
-    return text
-
-def generate_greedy_search_sent(
-        text: str,
-        gold: str,
-        model: PreTrainedModel,
-        tokenizer: PreTrainedTokenizerFast,
-        loss_fn=CrossEntropyLoss(),
-        vocab_text: str = None,
-        control: str = None, # OPTIONAL
-        max_source_length: int = 2048,
-        gen_target_min: int = 20,
-        gen_target_max: int = 400,
-):
-    device = model.device
-    
-    # switch to evaluation mode
-    model.eval()
-    # prepare source
-    if control is None:
-        encoder_input_ids = tokenizer(text,max_length=max_source_length,padding=False,truncation=True,return_tensors="pt").input_ids.to(device)
-    else:
-        labelsep_id = tokenizer.convert_tokens_to_ids("<label-sep>")
-        sentsep_id = tokenizer.convert_tokens_to_ids("<sent-sep>")
-        sep_id = tokenizer.convert_tokens_to_ids("<sep>")
-        control = [x.strip() for x in control.split(',') if x.strip()!=""]
-        encoder_input_ids = []
-        for item in control:
-            control_id = tokenizer.encode(item, padding=False)[1:-1] # remove bos and eos
-            encoder_input_ids.extend([labelsep_id]+control_id) 
-        encoder_input_ids.extend([sentsep_id]) 
-        # process source 
-        inputs = [x.strip() for x in text.split('<sep>') if x.strip()!=""]
-        for item in inputs:
-            encoder_input_ids.extend(tokenizer.encode(item, padding=False)[1:-1]+[sep_id])
-        encoder_input_ids = encoder_input_ids[:-1] # remove last <sep>
-        encoder_input_ids = ([tokenizer.bos_token_id]+encoder_input_ids[:max_source_length-2]+[tokenizer.eos_token_id])
-        encoder_input_ids = torch.tensor([encoder_input_ids]).to(device)
-
-    encoder_outputs = model.get_encoder()(encoder_input_ids, return_dict=True)
-    model_kwargs = {"encoder_outputs": encoder_outputs,}
-    eos, bos = tokenizer.eos_token_id, tokenizer.bos_token_id
-
-    assert model.config.model_type == "bart"
-    decoder_input_ids = torch.LongTensor([[model.config.decoder_start_token_id]]).to(device)
-
-    # for original
-    min_length = gen_target_min
-    max_length = gen_target_max
-    logits_processor = get_logits_processor(model.config, encoder_input_ids = encoder_input_ids, min_length = min_length, max_length = max_length,num_beams = 1,)
-    length_penalty = model.config.length_penalty # default is 2
-    early_stopping = model.config.early_stopping # true
-    # num_return_sequences = model.config.num_return_sequences
-    stopping_criteria = StoppingCriteriaList()
-    stopping_criteria.append(MaxLengthCriteria(max_length=max_length))
-
-    # process prompts
-    if control is None:
-        pre_prompt = gold.strip().split()[0]
-        post_prompt = gold.strip().split()[2]
-        prompts = get_prompts_from_input_text(text, pre_prompt, post_prompt)
-        formating = " "
-    else:
-        pre_prompt = "<label-sep>"
-        post_prompt = "<sent-sep>"
-        prompts = control
-        formating = ""
-    prompt_ids = []
-    for i, control_signal in enumerate(prompts):
-        if i == 0:
-            # Don't remove bos for the first prompt
-            lst = [i for i in tokenizer(pre_prompt+formating+control_signal+formating+post_prompt+formating).input_ids if i != eos]
-        else:
-            lst = [i for i in tokenizer(formating+pre_prompt+formating+control_signal+formating+post_prompt+formating).input_ids if i != bos and i != eos]
-        prompt_ids.append((lst, control_signal)) # format (ids, label_text)
-
-    with torch.no_grad():
-        prompt_tensor = torch.LongTensor([prompt_ids[0][0]]).to(device)
-        decoder_input_ids = torch.cat((decoder_input_ids, prompt_tensor), dim=1)
-        assert decoder_input_ids.dim() == 2 and decoder_input_ids.size(0) == 1
-
-        outputs = greedy_search_sent(
-            model,
-            tokenizer,
-            decoder_input_ids,
-            prompt_ids[1:], # the first is used already
-            logits_processor=logits_processor,
-            stopping_criteria=stopping_criteria,
-            pad_token_id=model.config.pad_token_id if model.config.pad_token_id is not None else eos,
-            eos_token_id=eos,
-            return_dict_in_generate=model.config.return_dict_in_generate,
-            **model_kwargs,
-        )
-        if isinstance(outputs, BeamSearchEncoderDecoderOutput) or isinstance(outputs, BeamSearchDecoderOnlyOutput):
-            outputs = outputs.sequences
-        assert outputs.dim() == 2 and outputs.size(0) == 1
-
-    text = tokenizer.batch_decode(outputs, skip_special_tokens=True, clean_up_tokenization_spaces=True)[0].strip()
-    loss = None
-    return text
-
 
 class DynamicModel(BaseModel):
     class Config:
@@ -484,7 +194,7 @@ class SummarizationModel(DynamicModel):
         )
 
     # def fit(self, train_file, validation_file):
-    def fit(self, train_file, validation_file, with_added_tokens=False, repeat_control=1):
+    def fit(self, train_file, validation_file):
         """
         train with or without eval by setting --do_eval
         """
@@ -508,8 +218,6 @@ class SummarizationModel(DynamicModel):
         )
         train_script.main(
             model_args=model_args, data_args=data_args, training_args=train_args, \
-            with_added_tokens=with_added_tokens, # default to use the model with added tokens
-            repeat_control=repeat_control, # SentBS: NEW  
         )
 
 
@@ -537,7 +245,7 @@ def main(args):
             save_steps=args.eval_steps,
             # resume_from_checkpoint=args.resume_from_checkpoint,
         )
-        model.fit(args.train_file, args.validation_file, args.with_added_tokens, args.repeat_ctr)
+        model.fit(args.train_file, args.validation_file)
 
     # Generation
     if args.do_predict:
@@ -567,20 +275,9 @@ def main(args):
         lm.resize_token_embeddings(len(tokenizer))
         
         df_test = pd.read_csv(args.test_file)
-        if args.with_added_tokens:
-            df_test = df_test[['text', 'summary','control']]
-            text_list = df_test["text"].tolist()
-            target_list = df_test["summary"].tolist()
-            control_list = df_test["control"].tolist()
-        elif args.label_gen: # slightly different format
-            df_test = df_test[["pid", "text", "summary"]]
-            pid_list = df_test["pid"].tolist()
-            text_list = df_test["text"].tolist()
-            target_list = df_test["summary"].tolist()
-        else:
-            df_test = df_test[['text', 'summary']]
-            text_list = df_test["text"].tolist()
-            target_list = df_test["summary"].tolist()
+        df_test = df_test[['text', 'summary']]
+        text_list = df_test["text"].tolist()
+        target_list = df_test["summary"].tolist()
             
 
         raw_golds,raw_preds = [],[]
@@ -589,98 +286,16 @@ def main(args):
 
         raw_prediction_file = open(str(Path(args.output_dir) / "raw_prediction.txt"),'w',encoding='utf-8')
         # raw_results_file = open(str(Path(args.output_dir) / "raw_rouge_results.json"),'w',encoding='utf-8')
-        if args.remove_prompts:
-            golds, preds = [],[]
-            prediction_file = open(str(Path(args.output_dir) / "processed_prediction.txt"),'w',encoding='utf-8')
-            raw_gold_file = open(str(Path(args.output_dir) / "raw_gold.txt"),'w',encoding='utf-8')
-            # results_file = open(str(Path(args.output_dir) / "rouge_results.json"),'w',encoding='utf-8')
-
         num_prediction_examples = len(text_list) if args.num_predict == -1 else min(args.num_predict, len(text_list))
         
-        if args.label_gen:
-            prev_pid = None
-            prev_list = []
-            prev_gold_list = []
-            processed_file = open(str(Path(args.output_dir) / "processed_prediction.txt"),'w',encoding='utf-8')
-            gold_file = open(str(Path(args.output_dir) / "prossed_gold.txt"),'w',encoding='utf-8')
-
+        
         for i in tqdm(range(num_prediction_examples)):
-            if args.with_added_tokens:
-                x, y, c = text_list[i], target_list[i], control_list[i]
-                if "beam_search_sent" in args.gen_type:
-                    output = generate_beam_search_sent(x,  lm, tokenizer, control = c, max_source_length=args.max_source_length, num_beams=args.num_beams, repeat_control=args.repeat_ctr, gen_target_min=args.gen_target_min, gen_target_max=args.gen_target_max)
-                elif "beam_search" in args.gen_type:
-                    output = generate_beam_search(x,  lm, tokenizer, control = c, max_source_length=args.max_source_length, num_beams=args.num_beams, repeat_control=args.repeat_ctr, gen_target_min=args.gen_target_min, gen_target_max=args.gen_target_max)
-                else: 
-                    output = generate_greedy_search_sent(x, y, lm, tokenizer, control = c, max_source_length=args.max_source_length, gen_target_min=args.gen_target_min, gen_target_max=args.gen_target_max)
-            elif args.label_gen:
-                pid, x, y = pid_list[i], text_list[i], target_list[i]
-                output = generate_beam_search(x, lm, tokenizer, max_source_length=args.max_source_length, num_beams=args.num_beams, gen_target_min=args.gen_target_min, gen_target_max=args.gen_target_max)
-                raw_prediction_file.write(pid+'\t'+output.strip()+'\n')
-                if not prev_pid:
-                    prev_pid = pid
-                    prev_list.append(output.strip())
-                    prev_gold_list.append(y.strip())
-                else:
-                    if pid == prev_pid:
-                        prev_list.append(output.strip())
-                        prev_gold_list.append(y.strip())
-                    else:
-                        prev_content = " ".join(prev_list).strip()
-                        prev_gold = " ".join(prev_gold_list).strip()
-                        raw_preds.append(prev_content)
-                        raw_golds.append(prev_gold)
-                        prev_list = [output.strip()]
-                        prev_gold_list = [y.strip()]
-                        processed_file.write(prev_content+'\n')
-                        gold_file.write(prev_gold+'\n')
-
-            else:
-                x, y = text_list[i], target_list[i]
-                if "beam_search_sent" in args.gen_type:
-                    output = generate_beam_search_sent(x,  lm, tokenizer, max_source_length=args.max_source_length, num_beams=args.num_beams, gen_target_min=args.gen_target_min, gen_target_max=args.gen_target_max)
-                elif "beam_search" in args.gen_type:
-                    output = generate_beam_search(x, lm, tokenizer, max_source_length=args.max_source_length, num_beams=args.num_beams, gen_target_min=args.gen_target_min, gen_target_max=args.gen_target_max)
-                elif "sent" in args.gen_type:
-                    output = generate_greedy_search_sent(x, y, lm, tokenizer, control = c, max_source_length=args.max_source_length, gen_target_min=args.gen_target_min, gen_target_max=args.gen_target_max)
-                else:
-                    output = generate_greedy_search(x, lm, tokenizer, max_source_length=args.max_source_length, gen_target_min=args.gen_target_min, gen_target_max=args.gen_target_max)
-
-                raw_prediction_file.write(output.strip()+'\n')
-                raw_preds.append(output)
-                raw_golds.append(y)
-                
-                if args.remove_prompts:
-                    processed_output = remove_prompts(output, rm_type="extra_tokens")
-                    prediction_file.write(processed_output.strip() + '\n')
-                    preds.append(processed_output)
-                    # print("processed:", processed_output)
-
-                    if type(y) is str and len(y) > 0:
-                        ref = y.replace(" <sent-sep> ", " ")
-                        raw_gold_file.write(y.strip()+'\n')
-                        golds.append(ref)
-
-        if args.label_gen:
-            if len(prev_list) > 0:
-                prev_content = " ".join(prev_list).strip()
-                raw_preds.append(prev_content)
-                prev_gold = " ".join(prev_gold_list).strip()
-                raw_golds.append(prev_gold)
-                processed_file.write(prev_content+'\n')
-                gold_file.write(prev_gold+'\n')
-            assert len(raw_preds) == len(raw_golds)
-            print(len(raw_preds))
-            raw_result = compute_metrics(raw_preds, raw_golds)
-            print("raw:\n", raw_result)
-
-
-            if args.remove_prompts:
-                result = compute_metrics(preds, golds)
-                print("processed:\n", result)
-                # results_file.write(str(result))
-                with open(str(Path(args.output_dir) / "prediction_rouge.json"), "w") as f:
-                    json.dump(result, f, indent=4, sort_keys=True)
+            x, y = text_list[i], target_list[i]
+            output = generate_beam_search(x, lm, tokenizer, max_source_length=args.max_source_length, num_beams=args.num_beams, gen_target_min=args.gen_target_min, gen_target_max=args.gen_target_max)
+            raw_prediction_file.write(output.strip()+'\n')
+            raw_preds.append(output)
+            raw_golds.append(y)
+            
                 
 def parse_arguments(parser):
 
@@ -729,21 +344,13 @@ def parse_arguments(parser):
 
     parser.add_argument('--early_stopping', action="store_true", default=False, help="early stopping during generation")
 
-    parser.add_argument('--label_gen', action="store_true", default=False, help="input data format: pid, text, summary")
-
-
     # deprecated, use eval_with_generate instead
     parser.add_argument('--predict_with_generate', action="store_true", default=False, help="Whether to use generate to calculate generative metrics (ROUGE, BLEU).")
     
     parser.add_argument('--eval_with_generate', action="store_true", default=False, help="Whether to use generate to calculate generative metrics (ROUGE, BLEU).")
 
     parser.add_argument('--return_dict_in_generate', type=bool, default=False, help="whether to return additional informations during genration")
-    parser.add_argument('--with_added_tokens', action="store_true", default=False, help="whether using the model with added tokens")
-    parser.add_argument('--gen_type', type=str, default="beam_search_sent", choices=['beam_search', 'greedy_search', 'greedy_search_sent', 'beam_search_sent'],
-                        help="the generation search method")
-    parser.add_argument('--remove_prompts', action="store_true", default=False,
-                        help="remove the prompts for generated files")
-    parser.add_argument('--repeat_ctr', type=int, default=1, help="quick test: repeat the number of control tokens to have larger weights")
+
     parser.add_argument('--lr', type=float, default=5e-5, help="learning rate")
 
     args = parser.parse_args()

@@ -74,19 +74,19 @@ We use the <a href="https://huggingface.co/facebook/bart-large-cnn?text=The+towe
 
 ##### 2.2. Commands to reproduce our results: <a href='#all_catelogue'>[Back to Top]</a>
 
-For all experiments below, please download our processed data from <a href="https://drive.google.com/file/d/1VpUinizFet_psuyqL7Y1miGe2y5Vg9z2/view?usp=sharing">here</a>.
+For all experiments below, please download our processed data from <a href="https://drive.google.com/file/d/1U6EPGuFyTG6ZMsqIrHQb6pjoyZk_EMux/view?usp=sharing">here</a>.
 Unzip the downloaded data and place all data folders under the root folder named ```/data```.
 
 <span id='sent-ctrl'/>
 
 ###### 2.2.1. Reproduce Sent-Ctrl (Table 1 upper section): <a href='#all_catelogue'>[Back to Top]</a>
 
-We include the <a href="https://drive.google.com/file/d/1VpUinizFet_psuyqL7Y1miGe2y5Vg9z2/view?usp=sharing">reformatted data</a> used for our experiments. The original data can also be obtained from <a href="https://github.com/Shen-Chenhui/MReD/tree/master/summarization/abstractive/filtered_controlled_data">here</a>. 
+We include the <a href="https://drive.google.com/file/d/1U6EPGuFyTG6ZMsqIrHQb6pjoyZk_EMux/view?usp=sharing">reformatted data</a> used for our experiments. The original data can also be obtained from <a href="https://github.com/Shen-Chenhui/MReD/tree/master/summarization/abstractive/filtered_controlled_data">here</a>. 
 
 To reproduce the sent-ctrl baseline, run:
 
 ```yaml
-CUDA_VISIBLE_DEVICES=0 python ctrl_transformer.py --model_name_or_path facebook/bart-large-cnn --do_train --do_eval --do_predict --train_file data/control_clean/train_rate_concat_control.csv --validation_file data/control_clean/val_rate_concat_control.csv --test_file data/control_clean/test_rate_concat_control.csv --output_dir ./results/sentctrl_reproduced  --seed 0 --save_total_limit 3 --gen_target_max 800 --gen_type beam_search --predict_with_generate --eval_steps 500 --max_source_length 2048
+CUDA_VISIBLE_DEVICES=0 python ctrl_transformer.py --model_name_or_path facebook/bart-large-cnn --do_train --do_eval --do_predict --train_file data/original_clean/train_rate_concat_sent-ctrl.csv --validation_file data/original_clean/val_rate_concat_sent-ctrl.csv --test_file data/original_clean/test_rate_concat_sent-ctrl.csv --output_dir ./results/sentctrl_reproduced  --seed 0 --save_total_limit 3 --gen_target_max 800 --predict_with_generate --eval_steps 500 --max_source_length 2048
 ```
 
 <span id='classifier'/>
@@ -94,7 +94,7 @@ CUDA_VISIBLE_DEVICES=0 python ctrl_transformer.py --model_name_or_path facebook/
 ###### 2.2.2. Train Classifier: <a href='#all_catelogue'>[Back to Top]</a>
 For the MReD dataset, we additionally train a sentence classifier so that during generation, the selection of sentence options is based on both the category classification score as well as the sequence likelihood.
 
-The classifier is trained on the <a href="https://drive.google.com/file/d/1VpUinizFet_psuyqL7Y1miGe2y5Vg9z2/view?usp=sharing">LSTM-labelled training data split</a>.
+The classifier is trained on the <a href="https://drive.google.com/file/d/1U6EPGuFyTG6ZMsqIrHQb6pjoyZk_EMux/view?usp=sharing">LSTM-labelled training data split</a>.
 
 The base architecture used for the classifier is the huggingface <a href="https://huggingface.co/roberta-large">Roberta-Large</a> model.
 ```yaml
@@ -111,8 +111,11 @@ For the following commands, you may adjust the ```k``` value with the flag ```--
 CUDA_VISIBLE_DEVICES=0 python beam_search_sent.py --gen_size 8 --beam_size 4 --top_p 0.9 --res_dir results/sampling --generation_model_path results/sentctrl_reproduced --test_file data/original_clean/test_rate_concat_sent-ctrl.csv --gen_mode sample --write --eval_rouge --load_classifier --classification_model_path <path_to_classification_model>
 ```
 
- <!-- --generation_model_path ../ctrl-transformer/results/original_clean_extra_tokens/
- --classification_model_path /mnt/workspace/project/ecpe_transformer/mred_sentence_classification/roberta-large/ -->
+ <!-- 
+ --generation_model_path ../ctrl-transformer/results/original_clean_extra_tokens/
+ --classification_model_path /mnt/workspace/project/ecpe_transformer/mred_sentence_classification/roberta-large/
+ --model_name_or_path /mnt/workspace/utils/huggingface_models/bart-large-cnn 
+ -->
 
 * For beam sampling:
 ```yaml
@@ -140,7 +143,7 @@ You may use the flag ```--num_beam_sample_gen``` to control the number of senten
 To reproduce the seg-ctrl baseline, run:
 
 ```yaml
-CUDA_VISIBLE_DEVICES=0 python ctrl_transformer.py --model_name_or_path facebook/bart-large-cnn --do_train --do_eval --do_predict --train_file data/original_seg_clean/train.csv --validation_file data/original_seg_clean/val.csv --test_file data/original_seg_clean/test.csv --output_dir results/segctrl_reproduced  --seed 0 --save_total_limit 3 --gen_target_max 800 --gen_type beam_search --predict_with_generate --eval_steps 500 --max_source_length 2048
+CUDA_VISIBLE_DEVICES=0 python ctrl_transformer.py --model_name_or_path facebook/bart-large-cnn --do_train --do_eval --do_predict --train_file data/original_seg_clean/train.csv --validation_file data/original_seg_clean/val.csv --test_file data/original_seg_clean/test.csv --output_dir results/segctrl_reproduced  --seed 0 --save_total_limit 3 --gen_target_max 800 --predict_with_generate --eval_steps 500 --max_source_length 2048
 ```
 
 For seg-ctrl+SentBS, run

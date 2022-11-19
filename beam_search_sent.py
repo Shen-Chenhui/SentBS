@@ -87,8 +87,6 @@ def parse_arguments(parser):
     parser.add_argument('--eval_rouge', action="store_true", default=False, help="Whether in evaluate rouge on the go")
     parser.add_argument('--beam_sample', action="store_true", default=False, help="Whether to use beam sampling for nucleus sampling")
 
-    parser.add_argument('--with_added_tokens', action="store_true", default=False, help="Whether to use itsp")
-
     args = parser.parse_args()
     for k in args.__dict__:
         print(k + ": " + str(args.__dict__[k]))
@@ -161,11 +159,7 @@ set_seed(args.run_num)
 # --------- Read Test File --------------
 if test_file[-3:] == "csv":
     df_test = pd.read_csv(test_file)
-    if args.with_added_tokens:
-        df_test = df_test[['text', 'summary', "control"]]
-        control_list = target_list = df_test["control"].tolist()
-    else:
-        df_test = df_test[['text', 'summary']]
+    df_test = df_test[['text', 'summary']]
     text_list = df_test["text"].tolist()
     target_list = df_test["summary"].tolist()
     total_test_examples = len(text_list)
@@ -731,40 +725,15 @@ for idx in tqdm(range(test_start_idx, total_test_examples)):
     else:
         text = raw_datasets[idx]['article']
         gold = raw_datasets[idx]['highlights']
-
-    if args.with_added_tokens: # ITSP process input
-        labelsep_id = tokenizer.convert_tokens_to_ids("<label-sep>")
-        sentsep_id = tokenizer.convert_tokens_to_ids("<sent-sep>")
-        sep_id = tokenizer.convert_tokens_to_ids("<sep>")
-        control = [x.strip() for x in control_list[idx].split(",") if x.strip()!= ""]
-        encoder_input_ids = []
-        control_id_list = []
-        for item in control:
-            control_id = tokenizer.encode(item, padding=False)[1:-1] # remove bos and eos
-            control_id_list.append(control_id)
-            encoder_input_ids.extend([labelsep_id] + control_id)
-        encoder_input_ids.extend([sentsep_id]) 
-        # process source 
-        # inputs = [x.strip() for x in text.split('<sep>') if x.strip()!=""]
-        # for item in inputs:
-        #     encoder_input_ids.extend(tokenizer.encode(item, padding=False)[1:-1]+[sep_id])
-        # encoder_input_ids = encoder_input_ids[:-1] # remove last <sep>
-        encoder_input_ids = tokenizer.encode(text, padding=False)[1:-1]
-        encoder_input_ids = ([tokenizer.bos_token_id]+encoder_input_ids[:args.max_source_length-2]+[tokenizer.eos_token_id])
-        input_ids = torch.LongTensor([encoder_input_ids]).to(device)
-    else:
-        input_ids = tokenizer(text,max_length=args.max_source_length,padding=False,truncation=True,return_tensors="pt").input_ids.to(device)
+    
+    input_ids = tokenizer(text,max_length=args.max_source_length,padding=False,truncation=True,return_tensors="pt").input_ids.to(device)
     
     output = None
 
     if gen_mode == "beam_search_sent":
         gen_history = []
-        # ITSP choice
-        if args.with_added_tokens:
-            target_labels = control
-        else: 
-            target_labels = text.split(" ==> ")[0].split(" | ")
-            target_labels = [x.strip() for x in target_labels]
+        target_labels = text.split(" ==> ")[0].split(" | ")
+        target_labels = [x.strip() for x in target_labels]
 
         if args.debug:
             print("target label list:", target_labels)
@@ -777,13 +746,7 @@ for idx in tqdm(range(test_start_idx, total_test_examples)):
                 print("\n\nsent no:", sent_idx, target_label)
 
             if sent_idx == 0:
-                if args.with_added_tokens: # ITSP
-                    decoder_input_ids_base = torch.LongTensor([[model.config.decoder_start_token_id]]).to(device)
-                    prompt_list = [labelsep_id] + control_id_list[sent_idx] + [sentsep_id]
-                    prompt_tensor = torch.LongTensor([prompt_list]).to(device)
-                    decoder_input_ids = torch.cat((decoder_input_ids_base, prompt_tensor), dim=1)
-                else:
-                    decoder_input_ids = None
+                decoder_input_ids = None
                 
                 sent_options, beamsearch_stopped = generate_sentence_options(GEN_SIZE, input_ids, target_id, prev_beamsearch_stopped=beamsearch_stopped, decoder_input_ids = decoder_input_ids)
                 gen_history = sort_filter_gen_history(sent_options, BEAM_SIZE) # get top k hypothesis
@@ -793,12 +756,7 @@ for idx in tqdm(range(test_start_idx, total_test_examples)):
                 for i, prev_item in enumerate(gen_history):
                     if args.debug:
                         print("\nprev state: logsum {} | num tokens {} | avg log {} | class prob {} | rank {} | {}".format(prev_item.logsum,prev_item.num_tokens_generated, prev_item.get_avg_log(), prev_item.classification_score, prev_item.classification_rank, prev_item.text))
-                    if args.with_added_tokens: # ITSP
-                        prompt_list = [labelsep_id] + control_id_list[sent_idx] + [sentsep_id]
-                        prompt_tensor = torch.LongTensor([prompt_list]).to(device)
-                        decoder_input_ids = torch.cat((prev_item.token_ids, prompt_tensor), dim = 1)
-                    else:
-                        decoder_input_ids = None
+                    decoder_input_ids = None
                     
                     batch_options, beamsearch_stopped = generate_sentence_options(GEN_SIZE, input_ids, target_id, prev_gen=prev_item, prev_beamsearch_stopped=beamsearch_stopped, decoder_input_ids = decoder_input_ids)
                     if args.debug:
@@ -905,11 +863,6 @@ for idx in tqdm(range(test_start_idx, total_test_examples)):
                 print("\n\n")
         output_text = sort_filter_gen_history(gen_history, 1)[0].text
 
-    if args.with_added_tokens:
-        if args.debug:
-            print("raw:", output_text.encode('utf-8'))
-        # output_text = remove_prompts(output_text, rm_type="extra_tokens")
-        gold = gold.replace(" <sent-sep> ", " ")
 
     if args.write:
         fw.write(output_text+'\n')

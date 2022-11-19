@@ -263,8 +263,6 @@ def main(
     model_args: ModelArguments = None,
     data_args: DataTrainingArguments = None,
     training_args: Seq2SeqTrainingArguments = None,
-    with_added_tokens: bool = False,
-    repeat_control: int = 1,
 ):
     # See all possible arguments in src/transformers/training_args.py
     # or by passing the --help flag to this script.
@@ -426,11 +424,6 @@ def main(
             raise ValueError(
                 f"--summary_column' value '{data_args.summary_column}' needs to be one of: {', '.join(column_names)}"
             )
-    # SCH: added control column
-    if (dataset_columns and len(dataset_columns) > 2) or  (column_names and len(column_names) > 2):
-        control_column = dataset_columns[2] if dataset_columns is not None else column_names[2]
-    else:
-        control_column = None
         
     padding = "max_length" if data_args.pad_to_max_length else False
 
@@ -440,104 +433,26 @@ def main(
             f"`{model.__class__.__name__}`. This will lead to loss being calculated twice and will take up more memory"
         )
 
-    if not with_added_tokens:
-        def preprocess_function(examples):
-            inputs = examples[text_column]
-            targets = examples[summary_column]
-            inputs = [prefix + inp for inp in inputs]
-            model_inputs = tokenizer(inputs, max_length=data_args.max_source_length, padding=padding, truncation=True)
-            # Setup the tokenizer for targets
-            with tokenizer.as_target_tokenizer():
-                # labels = tokenizer(targets, max_length=config.gen_target_max, padding=padding, truncation=True)
-                # SCH: NOTE: since we use filtered data, no need to train with further truncation
-                labels = tokenizer(targets, padding=padding, max_length=data_args.max_source_length, truncation=True)
+    def preprocess_function(examples):
+        inputs = examples[text_column]
+        targets = examples[summary_column]
+        inputs = [prefix + inp for inp in inputs]
+        model_inputs = tokenizer(inputs, max_length=data_args.max_source_length, padding=padding, truncation=True)
+        # Setup the tokenizer for targets
+        with tokenizer.as_target_tokenizer():
+            # labels = tokenizer(targets, max_length=config.gen_target_max, padding=padding, truncation=True)
+            # SCH: NOTE: since we use filtered data, no need to train with further truncation
+            labels = tokenizer(targets, padding=padding, max_length=data_args.max_source_length, truncation=True)
 
-            # If we are padding here, replace all tokenizer.pad_token_id in the labels by -100 when we want to ignore
-            # padding in the loss.
-            if padding == "max_length" and data_args.ignore_pad_token_for_loss:
-                labels["input_ids"] = [
-                    [(l if l != tokenizer.pad_token_id else -100) for l in label] for label in labels["input_ids"]
-                ]
-            model_inputs["labels"] = labels["input_ids"]
+        # If we are padding here, replace all tokenizer.pad_token_id in the labels by -100 when we want to ignore
+        # padding in the loss.
+        if padding == "max_length" and data_args.ignore_pad_token_for_loss:
+            labels["input_ids"] = [
+                [(l if l != tokenizer.pad_token_id else -100) for l in label] for label in labels["input_ids"]
+            ]
+        model_inputs["labels"] = labels["input_ids"]
 
-            if  control_column is not None:
-                controls = examples[control_column]
-                # add controls
-                model_inputs["controls"] = controls
-            return model_inputs  
-    else:
-        def preprocess_function(examples):
-            inputs = examples[text_column]
-            targets = examples[summary_column]
-            controls = examples[control_column]
-            processed_input_ids = []
-            processed_target_ids = []
-            labelsep_id = tokenizer.convert_tokens_to_ids("<label-sep>")
-            sentsep_id = tokenizer.convert_tokens_to_ids("<sent-sep>")
-            sep_id = tokenizer.convert_tokens_to_ids("<sep>")
-            
-            # # SCH:DEBUG
-            # id_list = []
-            # exids = examples["exid"]
-
-            # SCH: DEBUG
-            max_target_id_length = 0
-
-            for (source, target, control) in zip(inputs, targets, controls):
-            # for (source, target, control, exid) in zip(inputs, targets, controls, exids): # SCH: DEBUG
-                # process control ids
-                control = [x.strip() for x in control.split(',') if x.strip()!=""]
-                input_ids = []
-                control_ids = []
-                for item in control:
-                    control_ids.append(tokenizer.encode(item, padding=padding)[1:-1] * repeat_control) # SCH: NEW: repeat control
-                for item in control_ids:
-                    input_ids.extend([labelsep_id]+ item) # remove bos and eos
-                input_ids.extend([sentsep_id]) 
-                # process source 
-                inputs = [x.strip() for x in source.split('<sep>') if x.strip()!=""]
-                for item in inputs:
-                    input_ids.extend(tokenizer.encode(item, padding=padding)[1:-1]+[sep_id])
-                input_ids = input_ids[:-1] # remove last <sep>
-                input_ids = ([tokenizer.bos_token_id]+input_ids[:data_args.max_source_length-2]+[tokenizer.eos_token_id])
-                # process target
-                target_ids = []
-                with tokenizer.as_target_tokenizer():
-                    targets = [x.strip() for x in target.split('<sent-sep>') if x.strip()!=""]
-                    assert len(targets) == len(control_ids)
-                    for idx in range(len(targets)):
-                        item = targets[idx]
-                        front = [sep_id] if item[:5] == "<sep>" else []
-                        back = [sep_id] if item[-5:] == "<sep>" else []
-                        sent = tokenizer.encode(item.strip('<sep>'), padding=padding)[1:-1]
-                        target_ids.extend([labelsep_id]+control_ids[idx]+[sentsep_id]+ \
-                            front+sent+back)
-                ## SCH: NOTE: target will use embedder positions as well, 
-                # so even if we don't want to limit, it cannot exceed the initialized token embedding space, which is max source length
-                target_ids = ([tokenizer.bos_token_id]+target_ids[:data_args.max_source_length-2]+[tokenizer.eos_token_id])
-                # target_ids = ([tokenizer.bos_token_id]+target_ids[:config.gen_target_max-2]+[tokenizer.eos_token_id])
-                # target_ids = ([tokenizer.bos_token_id]+target_ids+[tokenizer.eos_token_id])
-                processed_input_ids.append(input_ids)
-                processed_target_ids.append(target_ids)
-                # SCH: DEBUG
-                # id_list.append(tokenizer.encode(exid))
-                # SCH: DEBUG
-                max_target_id_length = max(len(target_ids), max_target_id_length)
-            
-            ## DEBUG:
-            # print("\nsource check",tokenizer.decode(processed_input_ids[0])[:150].encode('utf-8'))
-            # print("\ntarget check",tokenizer.decode(processed_target_ids[0]).encode('utf-8'))
-            # print("\nexid",id_list[0])
-            
-            # DEBUG
-            # print("processed !!!")
-            print("max target length:", max_target_id_length)
-            
-            data = {"input_ids": processed_input_ids, "labels": processed_target_ids}
-            # # SCH: DEBUG
-            # data = {"input_ids": processed_input_ids, "labels": processed_target_ids, "exid": id_list}
-            model_inputs = BatchEncoding(data=data)
-            return model_inputs
+        return model_inputs  
 
     if training_args.do_train:
         print("loading train dataset...")
