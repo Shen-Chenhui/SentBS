@@ -1,7 +1,7 @@
 # SentBS: Sentence-level Beam Search for Controllable Summarization
 <!-- **Authors**: Chenhui Shen, Liying Cheng, Lidong Bing, Yang You and Luo Si -->
 
-This repository contains code and related resources of our paper ["SentBS: Sentence-level Beam Search for Controllable Summarization"](https://arxiv.org/abs/2210.14502).
+This repository contains code and related resources of our paper ["SentBS: Sentence-level Beam Search for Controllable Summarization"](https://aclanthology.org/2022.emnlp-main.699/).
 
 <!-- :star2: Check out this awesome [[demo]](https://huggingface.co/spaces/joaogante/contrastive_search_generation) generously supported by Huggingface ([@huggingface](https://github.com/huggingface) :hugs:) which compares contrastive search with other popular decoding methods. Many thanks to Huggingface :hugs:!  -->
 
