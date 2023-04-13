@@ -13,7 +13,7 @@ If you find our paper and resources useful, please kindly leave a star and cite 
 @article{shen2022sentbs,
   title={SentBS: Sentence-level Beam Search for Controllable Summarization},
   author={Shen, Chenhui and Cheng, Liying and Bing, Lidong and You, Yang and Si, Luo},
-  journal={arXiv preprint arXiv:2210.14502},
+  journal={EMNLP 2022},
   year={2022}
 }
 
